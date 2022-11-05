@@ -470,6 +470,7 @@ module ActiveRecord
           # Other Data Types
           m.register_type              "uniqueidentifier",  SQLServer::Type::Uuid.new
           m.register_type              "timestamp",         SQLServer::Type::Timestamp.new
+          m.register_type              "image",             SQLServer::Type::Image.new
         end
       end
 

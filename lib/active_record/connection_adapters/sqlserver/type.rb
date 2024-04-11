@@ -44,6 +44,7 @@ require "active_record/connection_adapters/sqlserver/type/varbinary_max"
 require "active_record/connection_adapters/sqlserver/type/uuid"
 require "active_record/connection_adapters/sqlserver/type/timestamp"
 require "active_record/connection_adapters/sqlserver/type/json"
+require "active_record/connection_adapters/sqlserver/type/image"
 
 module ActiveRecord
   module Type

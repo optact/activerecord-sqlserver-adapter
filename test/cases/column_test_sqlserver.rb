@@ -277,7 +277,7 @@ class ColumnTestSQLServer < ActiveRecord::TestCase
       _(col.sql_type).must_equal           "date"
       _(col.type).must_equal               :date
       _(col.null).must_equal               true
-      _(col.default).must_equal            connection_dblib_73? ? Date.civil(1, 1, 1) : "0001-01-01"
+      _(col.default).must_equal            connection_tds_73 ? Date.civil(1, 1, 1) : "0001-01-01"
       _(obj.date).must_equal               Date.civil(1, 1, 1)
       _(col.default_function).must_be_nil
       type = connection.lookup_cast_type_from_column(col)
@@ -357,7 +357,7 @@ class ColumnTestSQLServer < ActiveRecord::TestCase
     end
 
     it "datetime2" do
-      skip "datetime2 not supported in this protocol version" unless connection_dblib_73?
+      skip "datetime2 not supported in this protocol version" unless connection_tds_73
       col = column("datetime2_7")
       _(col.sql_type).must_equal           "datetime2(7)"
       _(col.type).must_equal               :datetime
@@ -422,7 +422,7 @@ class ColumnTestSQLServer < ActiveRecord::TestCase
     end
 
     it "datetimeoffset" do
-      skip "datetimeoffset not supported in this protocol version" unless connection_dblib_73?
+      skip "datetimeoffset not supported in this protocol version" unless connection_tds_73
       col = column("datetimeoffset_7")
       _(col.sql_type).must_equal           "datetimeoffset(7)"
       _(col.type).must_equal               :datetimeoffset
@@ -435,13 +435,15 @@ class ColumnTestSQLServer < ActiveRecord::TestCase
       _(type.limit).must_be_nil
       _(type.precision).must_equal 7
       _(type.scale).must_be_nil
-      # Can save 100 nanosecond precisoins and return again.
+
+      # Can save 100 nanosecond precisions and return again.
       obj.datetimeoffset_7 = Time.new(2010, 4, 1, 12, 34, 56, +18000).change(nsec: 123456755)
       _(obj.datetimeoffset_7).must_equal Time.new(2010, 4, 1, 12, 34, 56, +18000).change(nsec: 123456800), "Nanoseconds were <#{obj.datetimeoffset_7.nsec}> vs <123456800>"
       obj.save!
       _(obj.datetimeoffset_7).must_equal Time.new(2010, 4, 1, 12, 34, 56, +18000).change(nsec: 123456800), "Nanoseconds were <#{obj.datetimeoffset_7.nsec}> vs <123456800>"
       obj.reload
       _(obj.datetimeoffset_7).must_equal Time.new(2010, 4, 1, 12, 34, 56, +18000).change(nsec: 123456800), "Nanoseconds were <#{obj.datetimeoffset_7.nsec}> vs <123456800>"
+
       # Maintains the timezone
       time = ActiveSupport::TimeZone["America/Los_Angeles"].local 2010, 12, 31, 23, 59, 59, Rational(123456800, 1000)
       obj.datetimeoffset_7 = time
@@ -449,6 +451,7 @@ class ColumnTestSQLServer < ActiveRecord::TestCase
       obj.save!
       _(obj.datetimeoffset_7).must_equal time
       _(obj.reload.datetimeoffset_7).must_equal time
+
       # With other precisions.
       time = ActiveSupport::TimeZone["America/Los_Angeles"].local 2010, 12, 31, 23, 59, 59, Rational(123456755, 1000)
       col = column("datetimeoffset_3")
@@ -488,7 +491,7 @@ class ColumnTestSQLServer < ActiveRecord::TestCase
     end
 
     it "time(7)" do
-      skip "time() not supported in this protocol version" unless connection_dblib_73?
+      skip "time() not supported in this protocol version" unless connection_tds_73
       col = column("time_7")
       _(col.sql_type).must_equal           "time(7)"
       _(col.type).must_equal               :time
@@ -520,7 +523,7 @@ class ColumnTestSQLServer < ActiveRecord::TestCase
     end
 
     it "time(2)" do
-      skip "time() not supported in this protocol version" unless connection_dblib_73?
+      skip "time() not supported in this protocol version" unless connection_tds_73
       col = column("time_2")
       _(col.sql_type).must_equal           "time(2)"
       _(col.type).must_equal               :time
@@ -550,7 +553,7 @@ class ColumnTestSQLServer < ActiveRecord::TestCase
     end
 
     it "time using default precision" do
-      skip "time() not supported in this protocol version" unless connection_dblib_73?
+      skip "time() not supported in this protocol version" unless connection_tds_73
       col = column("time_default")
       _(col.sql_type).must_equal           "time(7)"
       _(col.type).must_equal               :time

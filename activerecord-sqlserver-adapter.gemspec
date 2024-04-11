@@ -7,10 +7,10 @@ Gem::Specification.new do |spec|
   spec.platform      = Gem::Platform::RUBY
   spec.version       = version
 
-  spec.required_ruby_version = ">= 2.7.0"
+  spec.required_ruby_version = ">= 3.1.0"
 
   spec.license       = "MIT"
-  spec.authors       = ["Ken Collins", "Anna Carey", "Will Bond", "Murray Steele", "Shawn Balestracci", "Joe Rafaniello", "Tom Ward"]
+  spec.authors       = ["Ken Collins", "Anna Carey", "Will Bond", "Murray Steele", "Shawn Balestracci", "Joe Rafaniello", "Tom Ward", "Aidan Haran"]
   spec.email         = ["ken@metaskills.net", "will@wbond.net"]
   spec.homepage      = "http://github.com/rails-sqlserver/activerecord-sqlserver-adapter"
   spec.summary       = "ActiveRecord SQL Server Adapter."
@@ -27,6 +27,6 @@ Gem::Specification.new do |spec|
   spec.test_files    = spec.files.grep(%r{^(test|spec|features)/})
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "activerecord", "~> 7.0.0"
+  spec.add_dependency "activerecord", "~> 7.2.0.alpha"
   spec.add_dependency "tiny_tds"
 end

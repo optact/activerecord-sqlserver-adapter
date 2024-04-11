@@ -14,8 +14,9 @@ ActiveRecord::Schema.define do
     t.float     :float_col
     t.string    :string_col
     t.text      :text_col
-    t.datetime  :datetime_col
-    t.timestamp :timestamp_col
+    t.datetime  :datetime_nil_precision_col, precision: nil
+    t.datetime  :datetime_col  # Precision defaults to 6
+    t.timestamp :timestamp_col # Precision defaults to 6
     t.time      :time_col
     t.date      :date_col
     t.binary    :binary_col
@@ -231,6 +232,23 @@ ActiveRecord::Schema.define do
     SELECT id AS id_source, event_name FROM INSERTED
   SQL
 
+  execute "IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'sst_table_with_composite_pk_trigger') DROP TABLE sst_table_with_composite_pk_trigger"
+  execute <<-SQL
+    CREATE TABLE sst_table_with_composite_pk_trigger(
+      pk_col_one int NOT NULL,
+      pk_col_two int NOT NULL,
+      event_name nvarchar(255),
+      CONSTRAINT PK_sst_table_with_composite_pk_trigger PRIMARY KEY (pk_col_one, pk_col_two)
+    )
+  SQL
+  execute <<-SQL
+    CREATE TRIGGER sst_table_with_composite_pk_trigger_t ON sst_table_with_composite_pk_trigger
+    FOR INSERT
+    AS
+    INSERT INTO sst_table_with_trigger_history (id_source, event_name)
+    SELECT pk_col_one AS id_source, event_name FROM INSERTED
+  SQL
+
   # Another schema.
 
   create_table :sst_schema_columns, force: true do |t|
@@ -312,4 +330,12 @@ ActiveRecord::Schema.define do
       CONSTRAINT PK_sst_composite_with_identity PRIMARY KEY (pk_col_one, pk_col_two)
     );
   COMPOSITE_WITH_IDENTITY
+
+  execute "IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'aliens' and TABLE_SCHEMA = 'test') DROP TABLE test.aliens"
+  execute <<-TABLE_IN_OTHER_SCHEMA_USED_BY_MODEL
+    CREATE TABLE test.aliens(
+      id int IDENTITY NOT NULL primary key,
+      name varchar(255)
+    )
+  TABLE_IN_OTHER_SCHEMA_USED_BY_MODEL
 end

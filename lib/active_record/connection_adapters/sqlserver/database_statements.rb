@@ -4,7 +4,7 @@ module ActiveRecord
   module ConnectionAdapters
     module SQLServer
       module DatabaseStatements
-        READ_QUERY = ActiveRecord::ConnectionAdapters::AbstractAdapter.build_read_query_regexp(:begin, :commit, :dbcc, :explain, :save, :select, :set, :rollback, :waitfor) # :nodoc:
+        READ_QUERY = ActiveRecord::ConnectionAdapters::AbstractAdapter.build_read_query_regexp(:begin, :commit, :dbcc, :explain, :save, :select, :set, :rollback, :waitfor, :use) # :nodoc:
         private_constant :READ_QUERY
 
         def write_query?(sql) # :nodoc:
@@ -13,40 +13,56 @@ module ActiveRecord
           !READ_QUERY.match?(sql.b)
         end
 
-        def execute(sql, name = nil)
-          sql = transform_query(sql)
-          if preventing_writes? && write_query?(sql)
-            raise ActiveRecord::ReadOnlyError, "Write query attempted while in readonly mode: #{sql}"
+        def raw_execute(sql, name, async: false, allow_retry: false, materialize_transactions: true)
+          result = nil
+
+          log(sql, name, async: async) do
+            with_raw_connection(allow_retry: allow_retry, materialize_transactions: materialize_transactions) do |conn|
+              result = if id_insert_table_name = query_requires_identity_insert?(sql)
+                         with_identity_insert_enabled(id_insert_table_name, conn) { internal_raw_execute(sql, conn, perform_do: true) }
+                       else
+                         internal_raw_execute(sql, conn, perform_do: true)
+                       end
+              verified!
+            end
           end
 
-          materialize_transactions
-          mark_transaction_written_if_write(sql)
-
-          if id_insert_table_name = query_requires_identity_insert?(sql)
-            with_identity_insert_enabled(id_insert_table_name) { do_execute(sql, name) }
-          else
-            do_execute(sql, name)
-          end
+          result
         end
 
-        def exec_query(sql, name = "SQL", binds = [], prepare: false, async: false)
+        def internal_exec_query(sql, name = "SQL", binds = [], prepare: false, async: false)
+          result = nil
           sql = transform_query(sql)
-          if preventing_writes? && write_query?(sql)
-            raise ActiveRecord::ReadOnlyError, "Write query attempted while in readonly mode: #{sql}"
-          end
 
-          materialize_transactions
+          check_if_write_query(sql)
           mark_transaction_written_if_write(sql)
 
-          sp_executesql(sql, name, binds, prepare: prepare, async: async)
+          unless without_prepared_statement?(binds)
+            types, params = sp_executesql_types_and_parameters(binds)
+            sql = sp_executesql_sql(sql, types, params, name)
+          end
+
+          log(sql, name, binds, async: async) do
+            with_raw_connection do |conn|
+              if id_insert_table_name = query_requires_identity_insert?(sql)
+                with_identity_insert_enabled(id_insert_table_name, conn) do
+                  result = internal_exec_sql_query(sql, conn)
+                end
+              else
+                result = internal_exec_sql_query(sql, conn)
+              end
+              verified!
+            end
+          end
+
+          result
         end
 
-        def exec_insert(sql, name = nil, binds = [], pk = nil, _sequence_name = nil)
-          if id_insert_table_name = exec_insert_requires_identity?(sql, pk, binds)
-            with_identity_insert_enabled(id_insert_table_name) { super(sql, name, binds, pk) }
-          else
-            super(sql, name, binds, pk)
-          end
+        def internal_exec_sql_query(sql, conn)
+          handle = internal_raw_execute(sql, conn)
+          handle_to_names_and_values(handle, ar_result: true)
+        ensure
+          finish_statement_handle(handle)
         end
 
         def exec_delete(sql, name, binds)
@@ -60,7 +76,7 @@ module ActiveRecord
         end
 
         def begin_db_transaction
-          do_execute "BEGIN TRANSACTION", "TRANSACTION"
+          internal_execute("BEGIN TRANSACTION", "TRANSACTION", allow_retry: true, materialize_transactions: false)
         end
 
         def transaction_isolation_levels
@@ -68,33 +84,20 @@ module ActiveRecord
         end
 
         def begin_isolated_db_transaction(isolation)
-          set_transaction_isolation_level transaction_isolation_levels.fetch(isolation)
+          set_transaction_isolation_level(transaction_isolation_levels.fetch(isolation))
           begin_db_transaction
         end
 
         def set_transaction_isolation_level(isolation_level)
-          do_execute "SET TRANSACTION ISOLATION LEVEL #{isolation_level}", "TRANSACTION"
+          internal_execute("SET TRANSACTION ISOLATION LEVEL #{isolation_level}", "TRANSACTION", allow_retry: true, materialize_transactions: false)
         end
 
         def commit_db_transaction
-          do_execute "COMMIT TRANSACTION", "TRANSACTION"
+          internal_execute("COMMIT TRANSACTION", "TRANSACTION", allow_retry: false, materialize_transactions: true)
         end
 
         def exec_rollback_db_transaction
-          do_execute "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION", "TRANSACTION"
-        end
-
-        include Savepoints
-
-        def create_savepoint(name = current_savepoint_name)
-          do_execute "SAVE TRANSACTION #{name}", "TRANSACTION"
-        end
-
-        def exec_rollback_to_savepoint(name = current_savepoint_name)
-          do_execute "ROLLBACK TRANSACTION #{name}", "TRANSACTION"
-        end
-
-        def release_savepoint(name = current_savepoint_name)
+          internal_execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION", "TRANSACTION", allow_retry: false, materialize_transactions: true)
         end
 
         def case_sensitive_comparison(attribute, value)
@@ -164,42 +167,43 @@ module ActiveRecord
         # === SQLServer Specific ======================================== #
 
         def execute_procedure(proc_name, *variables)
-          materialize_transactions
-
           vars = if variables.any? && variables.first.is_a?(Hash)
                    variables.first.map { |k, v| "@#{k} = #{quote(v)}" }
                  else
                    variables.map { |v| quote(v) }
                  end.join(", ")
           sql = "EXEC #{proc_name} #{vars}".strip
-          name = "Execute Procedure"
-          log(sql, name) do
-            case @connection_options[:mode]
-            when :dblib
-              result = ensure_established_connection! { dblib_execute(sql) }
+
+          log(sql, "Execute Procedure") do
+            with_raw_connection do |conn|
+              result = internal_raw_execute(sql, conn)
+              verified!
               options = { as: :hash, cache_rows: true, timezone: ActiveRecord.default_timezone || :utc }
+
               result.each(options) do |row|
                 r = row.with_indifferent_access
                 yield(r) if block_given?
               end
+
               result.each.map { |row| row.is_a?(Hash) ? row.with_indifferent_access : row }
             end
           end
+
         end
 
-        def with_identity_insert_enabled(table_name)
+        def with_identity_insert_enabled(table_name, conn)
           table_name = quote_table_name(table_name)
-          set_identity_insert(table_name, true)
+          set_identity_insert(table_name, conn, true)
           yield
         ensure
-          set_identity_insert(table_name, false)
+          set_identity_insert(table_name, conn, false)
         end
 
         def use_database(database = nil)
           return if sqlserver_azure?
 
-          name = SQLServer::Utils.extract_identifiers(database || @connection_options[:database]).quoted
-          do_execute "USE #{name}" unless name.blank?
+          name = SQLServer::Utils.extract_identifiers(database || @connection_parameters[:database]).quoted
+          execute("USE #{name}", "SCHEMA") unless name.blank?
         end
 
         def user_options
@@ -263,58 +267,51 @@ module ActiveRecord
 
         protected
 
-        def sql_for_insert(sql, pk, binds)
+        def sql_for_insert(sql, pk, binds, returning)
           if pk.nil?
             table_name = query_requires_identity_insert?(sql)
             pk = primary_key(table_name)
           end
 
           sql = if pk && use_output_inserted? && !database_prefix_remote_server?
-                  quoted_pk = SQLServer::Utils.extract_identifiers(pk).quoted
                   table_name ||= get_table_name(sql)
                   exclude_output_inserted = exclude_output_inserted_table_name?(table_name, sql)
 
                   if exclude_output_inserted
+                    quoted_pk = Array(pk).map { |subkey| SQLServer::Utils.extract_identifiers(subkey).quoted }
+
                     id_sql_type = exclude_output_inserted.is_a?(TrueClass) ? "bigint" : exclude_output_inserted
                     <<~SQL.squish
-                      DECLARE @ssaIdInsertTable table (#{quoted_pk} #{id_sql_type});
-                      #{sql.dup.insert sql.index(/ (DEFAULT )?VALUES/), " OUTPUT INSERTED.#{quoted_pk} INTO @ssaIdInsertTable"}
-                      SELECT CAST(#{quoted_pk} AS #{id_sql_type}) FROM @ssaIdInsertTable
+                      DECLARE @ssaIdInsertTable table (#{quoted_pk.map { |subkey| "#{subkey} #{id_sql_type}"}.join(", ") });
+                      #{sql.dup.insert sql.index(/ (DEFAULT )?VALUES/i), " OUTPUT #{ quoted_pk.map { |subkey| "INSERTED.#{subkey}" }.join(", ") } INTO @ssaIdInsertTable"}
+                      SELECT #{quoted_pk.map {|subkey| "CAST(#{subkey} AS #{id_sql_type}) #{subkey}"}.join(", ")} FROM @ssaIdInsertTable
                     SQL
                   else
-                    sql.dup.insert sql.index(/ (DEFAULT )?VALUES/), " OUTPUT INSERTED.#{quoted_pk}"
+                    returning_columns = returning || Array(pk)
+
+                    if returning_columns.any?
+                      returning_columns_statements = returning_columns.map { |c| " INSERTED.#{SQLServer::Utils.extract_identifiers(c).quoted}" }
+                      sql.dup.insert sql.index(/ (DEFAULT )?VALUES/i), " OUTPUT" + returning_columns_statements.join(",")
+                    else
+                      sql
+                    end
                   end
                 else
                   "#{sql}; SELECT CAST(SCOPE_IDENTITY() AS bigint) AS Ident"
                 end
-          super
+
+          [sql, binds]
         end
 
         # === SQLServer Specific ======================================== #
 
-        def set_identity_insert(table_name, enable = true)
-          do_execute "SET IDENTITY_INSERT #{table_name} #{enable ? 'ON' : 'OFF'}"
+        def set_identity_insert(table_name, conn, enable)
+          internal_raw_execute("SET IDENTITY_INSERT #{table_name} #{enable ? 'ON' : 'OFF'}", conn , perform_do: true)
         rescue Exception
           raise ActiveRecordError, "IDENTITY_INSERT could not be turned #{enable ? 'ON' : 'OFF'} for table #{table_name}"
         end
 
         # === SQLServer Specific (Executing) ============================ #
-
-        def do_execute(sql, name = "SQL")
-          materialize_transactions
-          mark_transaction_written_if_write(sql)
-
-          log(sql, name) { raw_connection_do(sql) }
-        end
-
-        def sp_executesql(sql, name, binds, options = {})
-          options[:ar_result] = true if options[:fetch] != :rows
-          unless without_prepared_statement?(binds)
-            types, params = sp_executesql_types_and_parameters(binds)
-            sql = sp_executesql_sql(sql, types, params, name)
-          end
-          raw_select sql, name, binds, options
-        end
 
         def sp_executesql_types_and_parameters(binds)
           types, params = [], []
@@ -328,6 +325,7 @@ module ActiveRecord
         end
 
         def sp_executesql_sql_type(attr)
+          return "nvarchar(max)".freeze if attr.is_a?(Symbol)
           return attr.type.sqlserver_type if attr.type.respond_to?(:sqlserver_type)
 
           case value = attr.value_for_database
@@ -339,6 +337,8 @@ module ActiveRecord
         end
 
         def sp_executesql_sql_param(attr)
+          return quote(attr) if attr.is_a?(Symbol)
+
           case value = attr.value_for_database
           when Type::Binary::Data,
                ActiveRecord::Type::SQLServer::Data
@@ -363,16 +363,6 @@ module ActiveRecord
           sql.freeze
         end
 
-        def raw_connection_do(sql)
-          case @connection_options[:mode]
-          when :dblib
-            result = ensure_established_connection! { dblib_execute(sql) }
-            result.do
-          end
-        ensure
-          @update_sql = false
-        end
-
         # === SQLServer Specific (Identity Inserts) ===================== #
 
         def use_output_inserted?
@@ -392,23 +382,17 @@ module ActiveRecord
           self.class.exclude_output_inserted_table_names[table_name]
         end
 
-        def exec_insert_requires_identity?(sql, pk, binds)
-          query_requires_identity_insert?(sql)
-        end
-
         def query_requires_identity_insert?(sql)
-          if insert_sql?(sql)
-            table_name = get_table_name(sql)
-            id_column = identity_columns(table_name).first
-            # id_column && sql =~ /^\s*(INSERT|EXEC sp_executesql N'INSERT)[^(]+\([^)]*\b(#{id_column.name})\b,?[^)]*\)/i ? quote_table_name(table_name) : false
-            id_column && sql =~ /^\s*(INSERT|EXEC sp_executesql N'INSERT)[^(]+\([^)]*\b(#{id_column.name})\b,?[^)]*\)/i ? table_name : false
-          else
-            false
-          end
+          return false unless insert_sql?(sql)
+
+          raw_table_name = get_raw_table_name(sql)
+          id_column = identity_columns(raw_table_name).first
+
+          id_column && sql =~ /^\s*(INSERT|EXEC sp_executesql N'INSERT)[^(]+\([^)]*\b(#{id_column.name})\b,?[^)]*\)/i ? SQLServer::Utils.extract_identifiers(raw_table_name).quoted : false
         end
 
         def insert_sql?(sql)
-          !(sql =~ /^\s*(INSERT|EXEC sp_executesql N'INSERT)/i).nil?
+          !(sql =~ /\A\s*(INSERT|EXEC sp_executesql N'INSERT)/i).nil?
         end
 
         def identity_columns(table_name)
@@ -417,68 +401,38 @@ module ActiveRecord
 
         # === SQLServer Specific (Selecting) ============================ #
 
-        def raw_select(sql, name = "SQL", binds = [], options = {})
-          log(sql, name, binds, async: options[:async]) { _raw_select(sql, options) }
-        end
-
-        def _raw_select(sql, options = {})
-          handle = raw_connection_run(sql)
-          handle_to_names_and_values(handle, options)
+        def _raw_select(sql, conn)
+          handle = internal_raw_execute(sql, conn)
+          handle_to_names_and_values(handle, fetch: :rows)
         ensure
           finish_statement_handle(handle)
         end
 
-        def raw_connection_run(sql)
-          case @connection_options[:mode]
-          when :dblib
-            ensure_established_connection! { dblib_execute(sql) }
-          end
-        end
-
-        def handle_more_results?(handle)
-          case @connection_options[:mode]
-          when :dblib
-          end
-        end
-
         def handle_to_names_and_values(handle, options = {})
-          case @connection_options[:mode]
-          when :dblib
-            handle_to_names_and_values_dblib(handle, options)
-          end
-        end
-
-        def handle_to_names_and_values_dblib(handle, options = {})
           query_options = {}.tap do |qo|
             qo[:timezone] = ActiveRecord.default_timezone || :utc
             qo[:as] = (options[:ar_result] || options[:fetch] == :rows) ? :array : :hash
           end
           results = handle.each(query_options)
           columns = lowercase_schema_reflection ? handle.fields.map { |c| c.downcase } : handle.fields
+
           options[:ar_result] ? ActiveRecord::Result.new(columns, results) : results
         end
 
         def finish_statement_handle(handle)
-          case @connection_options[:mode]
-          when :dblib
-            handle.cancel if handle
-          end
+          handle.cancel if handle
           handle
         end
 
-        def dblib_execute(sql)
-          @connection.execute(sql).tap do |result|
-            # TinyTDS returns false instead of raising an exception if connection fails.
-            # Getting around this by raising an exception ourselves while this PR
-            # https://github.com/rails-sqlserver/tiny_tds/pull/469 is not released.
-            raise TinyTds::Error, "failed to execute statement" if result.is_a?(FalseClass)
+        # TinyTDS returns false instead of raising an exception if connection fails.
+        # Getting around this by raising an exception ourselves while PR
+        # https://github.com/rails-sqlserver/tiny_tds/pull/469 is not released.
+        def internal_raw_execute(sql, conn, perform_do: false)
+          result = conn.execute(sql).tap do |_result|
+            raise TinyTds::Error, "failed to execute statement" if _result.is_a?(FalseClass)
           end
-        end
 
-        def ensure_established_connection!
-          raise TinyTds::Error, 'SQL Server client is not connected' unless @connection
-
-          yield
+          perform_do ? result.do : result
         end
       end
     end

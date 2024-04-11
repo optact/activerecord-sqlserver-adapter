@@ -8,20 +8,14 @@ module ARTest
       included { extend ConnectionReflection }
 
       def connection
-        ActiveRecord::Base.connection
+        ActiveRecord::Base.lease_connection
       end
 
       def connection_options
-        connection.instance_variable_get :@connection_options
+        connection.instance_variable_get :@connection_parameters
       end
 
-      def connection_dblib?
-        connection_options[:mode] == :dblib
-      end
-
-      def connection_dblib_73?
-        return false unless connection_dblib?
-
+      def connection_tds_73
         rc = connection.raw_connection
         rc.respond_to?(:tds_73?) && rc.tds_73?
       end

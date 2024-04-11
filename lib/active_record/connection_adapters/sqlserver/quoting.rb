@@ -4,18 +4,18 @@ module ActiveRecord
   module ConnectionAdapters
     module SQLServer
       module Quoting
-        QUOTED_TRUE  = "1".freeze
-        QUOTED_FALSE = "0".freeze
-        QUOTED_STRING_PREFIX = "N".freeze
+        QUOTED_COLUMN_NAMES = Concurrent::Map.new # :nodoc:
+        QUOTED_TABLE_NAMES = Concurrent::Map.new # :nodoc:
 
         def fetch_type_metadata(sql_type, sqlserver_options = {})
           cast_type = lookup_cast_type(sql_type)
+
           simple_type = SqlTypeMetadata.new(
-            sql_type: sql_type,
-            type: cast_type.type,
-            limit: cast_type.limit,
+            sql_type:  sql_type,
+            type:      cast_type.type,
+            limit:     cast_type.limit,
             precision: cast_type.precision,
-            scale: cast_type.scale
+            scale:     cast_type.scale
           )
 
           SQLServer::TypeMetadata.new(simple_type, **sqlserver_options)
@@ -34,12 +34,16 @@ module ActiveRecord
         end
 
         def quote_column_name(name)
-          SQLServer::Utils.extract_identifiers(name).quoted
+          QUOTED_COLUMN_NAMES[name] ||= SQLServer::Utils.extract_identifiers(name).quoted
+        end
+
+        def quote_table_name(name)
+          QUOTED_TABLE_NAMES[name] ||= SQLServer::Utils.extract_identifiers(name).quoted
         end
 
         def quote_default_expression(value, column)
           cast_type = lookup_cast_type(column.sql_type)
-          if cast_type.type == :uuid && value =~ /\(\)/
+          if cast_type.type == :uuid && value.is_a?(String) && value.include?('()')
             value
           else
             super
@@ -47,7 +51,7 @@ module ActiveRecord
         end
 
         def quoted_true
-          QUOTED_TRUE
+          '1'
         end
 
         def unquoted_true
@@ -55,7 +59,7 @@ module ActiveRecord
         end
 
         def quoted_false
-          QUOTED_FALSE
+          '0'
         end
 
         def unquoted_false
@@ -85,7 +89,7 @@ module ActiveRecord
           (
             (?:
               # [database_name].[database_owner].[table_name].[column_name] | function(one or no argument)
-              ((?:\w+\.|\[\w+\]\.)?(?:\w+\.|\[\w+\]\.)?(?:\w+\.|\[\w+\]\.)?(?:\w+|\[\w+\])) | \w+\((?:|\g<2>)\)
+              ((?:\w+\.|\[\w+\]\.)?(?:\w+\.|\[\w+\]\.)?(?:\w+\.|\[\w+\]\.)?(?:\w+|\[\w+\]) | \w+\((?:|\g<2>)\))
             )
             (?:\s+AS\s+(?:\w+|\[\w+\]))?
           )
@@ -98,8 +102,9 @@ module ActiveRecord
           (
             (?:
               # [database_name].[database_owner].[table_name].[column_name] | function(one or no argument)
-              ((?:\w+\.|\[\w+\]\.)?(?:\w+\.|\[\w+\]\.)?(?:\w+\.|\[\w+\]\.)?(?:\w+|\[\w+\])) | \w+\((?:|\g<2>)\)
+              ((?:\w+\.|\[\w+\]\.)?(?:\w+\.|\[\w+\]\.)?(?:\w+\.|\[\w+\]\.)?(?:\w+|\[\w+\]) | \w+\((?:|\g<2>)\))
             )
+            (?:\s+COLLATE\s+\w+)?
             (?:\s+ASC|\s+DESC)?
             (?:\s+NULLS\s+(?:FIRST|LAST))?
           )
@@ -116,7 +121,7 @@ module ActiveRecord
           when ActiveRecord::Type::SQLServer::Data
             value.quoted
           when String, ActiveSupport::Multibyte::Chars
-            "#{QUOTED_STRING_PREFIX}#{super}"
+            "N#{super}"
           else
             super
           end

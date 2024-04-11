@@ -101,12 +101,23 @@ module ActiveRecord
 
         def new_column_definition(name, type, **options)
           case type
-          when :datetime
-            type = :datetime2 if options[:precision]
+          when :datetime, :timestamp
+            # If no precision then default it to 6.
+            options[:precision] = 6 unless options.key?(:precision)
+
+            # If there is precision then column must be of type 'datetime2'.
+            type = :datetime2 unless options[:precision].nil?
           when :primary_key
             options[:is_identity] = true
           end
+
           super
+        end
+
+        private
+
+        def valid_column_definition_options
+          super + [:is_identity]
         end
       end
 

@@ -23,10 +23,10 @@ module ActiveRecord
               pktable = fkdata["PKTABLE_NAME"]
               pkcolmn = fkdata["PKCOLUMN_NAME"]
               remove_foreign_key fktable, name: fkdata["FK_NAME"]
-              do_execute "DELETE FROM #{quote_table_name(fktable)} WHERE #{quote_column_name(fkcolmn)} IN ( SELECT #{quote_column_name(pkcolmn)} FROM #{quote_table_name(pktable)} )"
+              execute "DELETE FROM #{quote_table_name(fktable)} WHERE #{quote_column_name(fkcolmn)} IN ( SELECT #{quote_column_name(pkcolmn)} FROM #{quote_table_name(pktable)} )"
             end
           end
-          if options[:if_exists] && @version_year < 2016
+          if options[:if_exists] && version_year < 2016
             execute "IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = #{quote(table_name)}) DROP TABLE #{quote_table_name(table_name)}", "SCHEMA"
           else
             super
@@ -39,12 +39,12 @@ module ActiveRecord
           data.reduce([]) do |indexes, index|
             index = index.with_indifferent_access
 
-            if index[:index_description] =~ /primary key/
+            if index[:index_description].match?(/primary key/)
               indexes
             else
               name    = index[:index_name]
-              unique  = index[:index_description] =~ /unique/
-              where   = select_value("SELECT [filter_definition] FROM sys.indexes WHERE name = #{quote(name)}")
+              unique  = index[:index_description].match?(/unique/)
+              where   = select_value("SELECT [filter_definition] FROM sys.indexes WHERE name = #{quote(name)}", "SCHEMA")
               orders  = {}
               columns = []
 
@@ -118,15 +118,20 @@ module ActiveRecord
             AND TC.CONSTRAINT_TYPE = N'PRIMARY KEY'
             ORDER BY KCU.ORDINAL_POSITION ASC
           }.gsub(/[[:space:]]/, " ")
+
           binds = []
           nv128 = SQLServer::Type::UnicodeVarchar.new limit: 128
           binds << Relation::QueryAttribute.new("TABLE_NAME", identifier.object, nv128)
           binds << Relation::QueryAttribute.new("TABLE_SCHEMA", identifier.schema, nv128) unless identifier.schema.blank?
-          sp_executesql(sql, "SCHEMA", binds).map { |r| r["name"] }
+
+          internal_exec_query(sql, "SCHEMA", binds).map { |row| row["name"] }
         end
 
-        def rename_table(table_name, new_name)
-          do_execute "EXEC sp_rename '#{table_name}', '#{new_name}'"
+        def rename_table(table_name, new_name, **options)
+          validate_table_length!(new_name) unless options[:_uses_legacy_table_name]
+          schema_cache.clear_data_source_cache!(table_name.to_s)
+          schema_cache.clear_data_source_cache!(new_name.to_s)
+          execute "EXEC sp_rename '#{table_name}', '#{new_name}'"
           rename_table_indexes(table_name, new_name)
         end
 
@@ -137,12 +142,21 @@ module ActiveRecord
           remove_check_constraints(table_name, column_name)
           remove_default_constraint(table_name, column_name)
           remove_indexes(table_name, column_name)
-          do_execute "ALTER TABLE #{quote_table_name(table_name)} DROP COLUMN #{quote_column_name(column_name)}"
+          execute "ALTER TABLE #{quote_table_name(table_name)} DROP COLUMN #{quote_column_name(column_name)}"
         end
 
         def change_column(table_name, column_name, type, options = {})
           sql_commands = []
           indexes = []
+
+          if type == :datetime
+            # If no precision then default it to 6.
+            options[:precision] = 6 unless options.key?(:precision)
+
+            # If there is precision then column must be of type 'datetime2'.
+            type = :datetime2 unless options[:precision].nil?
+          end
+
           column_object = schema_cache.columns(table_name).find { |c| c.name.to_s == column_name.to_s }
           without_constraints = options.key?(:default) || options.key?(:limit)
           default = if !options.key?(:default) && column_object
@@ -150,25 +164,30 @@ module ActiveRecord
                     else
                       options[:default]
                     end
+
           if without_constraints || (column_object && column_object.type != type.to_sym)
             remove_default_constraint(table_name, column_name)
             indexes = indexes(table_name).select { |index| index.columns.include?(column_name.to_s) }
             remove_indexes(table_name, column_name)
           end
+
           sql_commands << "UPDATE #{quote_table_name(table_name)} SET #{quote_column_name(column_name)}=#{quote_default_expression(options[:default], column_object)} WHERE #{quote_column_name(column_name)} IS NULL" if !options[:null].nil? && options[:null] == false && !options[:default].nil?
           alter_command = "ALTER TABLE #{quote_table_name(table_name)} ALTER COLUMN #{quote_column_name(column_name)} #{type_to_sql(type, limit: options[:limit], precision: options[:precision], scale: options[:scale])}"
           alter_command += " COLLATE #{options[:collation]}" if options[:collation].present?
           alter_command += " NOT NULL" if !options[:null].nil? && options[:null] == false
           sql_commands << alter_command
+
           if without_constraints
             default = quote_default_expression(default, column_object || column_for(table_name, column_name))
             sql_commands << "ALTER TABLE #{quote_table_name(table_name)} ADD CONSTRAINT #{default_constraint_name(table_name, column_name)} DEFAULT #{default} FOR #{quote_column_name(column_name)}"
           end
+
           # Add any removed indexes back
           indexes.each do |index|
             sql_commands << "CREATE INDEX #{quote_table_name(index.name)} ON #{quote_table_name(table_name)} (#{index.columns.map { |c| quote_column_name(c) }.join(', ')})"
           end
-          sql_commands.each { |c| do_execute(c) }
+
+          sql_commands.each { |c| execute(c) }
           clear_cache!
         end
 
@@ -179,7 +198,7 @@ module ActiveRecord
 
           remove_default_constraint(table_name, column_name)
           default = extract_new_default_value(default_or_changes)
-          do_execute "ALTER TABLE #{quote_table_name(table_name)} ADD CONSTRAINT #{default_constraint_name(table_name, column_name)} DEFAULT #{quote_default_expression(default, column)} FOR #{quote_column_name(column_name)}"
+          execute "ALTER TABLE #{quote_table_name(table_name)} ADD CONSTRAINT #{default_constraint_name(table_name, column_name)} DEFAULT #{quote_default_expression(default, column)} FOR #{quote_column_name(column_name)}"
           clear_cache!
         end
 
@@ -199,23 +218,45 @@ module ActiveRecord
         end
 
         def remove_index!(table_name, index_name)
-          do_execute "DROP INDEX #{quote_column_name(index_name)} ON #{quote_table_name(table_name)}"
+          execute "DROP INDEX #{quote_column_name(index_name)} ON #{quote_table_name(table_name)}"
+        end
+
+        def build_change_column_definition(table_name, column_name, type, **options) # :nodoc:
+          td = create_table_definition(table_name)
+          cd = td.new_column_definition(column_name, type, **options)
+          ChangeColumnDefinition.new(cd, column_name)
+        end
+
+        def build_change_column_default_definition(table_name, column_name, default_or_changes) # :nodoc:
+          column = column_for(table_name, column_name)
+          return unless column
+
+          default = extract_new_default_value(default_or_changes)
+          ChangeColumnDefaultDefinition.new(column, default)
         end
 
         def foreign_keys(table_name)
           identifier = SQLServer::Utils.extract_identifiers(table_name)
           fk_info = execute_procedure :sp_fkeys, nil, identifier.schema, nil, identifier.object, identifier.schema
-          fk_info.map do |row|
-            from_table = identifier.object
-            to_table = row["PKTABLE_NAME"]
+
+          grouped_fk = fk_info.group_by { |row| row["FK_NAME"] }.values.each { |group| group.sort_by! { |row| row["KEY_SEQ"] } }
+          grouped_fk.map do |group|
+            row = group.first
             options = {
               name: row["FK_NAME"],
-              column: row["FKCOLUMN_NAME"],
-              primary_key: row["PKCOLUMN_NAME"],
               on_update: extract_foreign_key_action("update", row["FK_NAME"]),
               on_delete: extract_foreign_key_action("delete", row["FK_NAME"])
             }
-            ForeignKeyDefinition.new from_table, to_table, options
+
+            if group.one?
+              options[:column] = row["FKCOLUMN_NAME"]
+              options[:primary_key] = row["PKCOLUMN_NAME"]
+            else
+              options[:column] = group.map { |row| row["FKCOLUMN_NAME"] }
+              options[:primary_key] = group.map { |row| row["PKCOLUMN_NAME"] }
+            end
+
+            ForeignKeyDefinition.new(identifier.object, row["PKTABLE_NAME"], options)
           end
         end
 
@@ -226,9 +267,33 @@ module ActiveRecord
           end
         end
 
+        def check_constraints(table_name)
+          sql = <<~SQL
+            select chk.name AS 'name',
+                   chk.definition AS 'expression'
+            from sys.check_constraints chk
+            inner join sys.tables st on chk.parent_object_id = st.object_id
+            where
+            st.name = '#{table_name}'
+          SQL
+
+          chk_info = internal_exec_query(sql, "SCHEMA")
+
+          chk_info.map do |row|
+            options = {
+              name: row["name"]
+            }
+            expression = row["expression"]
+            expression = expression[1..-2] if expression.start_with?("(") && expression.end_with?(")")
+
+            CheckConstraintDefinition.new(table_name, expression, options)
+          end
+        end
+
         def type_to_sql(type, limit: nil, precision: nil, scale: nil, **)
           type_limitable = %w(string integer float char nchar varchar nvarchar).include?(type.to_s)
           limit = nil unless type_limitable
+
           case type.to_s
           when "integer"
             case limit
@@ -238,6 +303,16 @@ module ActiveRecord
             when 5..8       then  "bigint"
             else raise(ActiveRecordError, "No integer type has byte size #{limit}. Use a numeric with precision 0 instead.")
             end
+          when "time" # https://learn.microsoft.com/en-us/sql/t-sql/data-types/time-transact-sql
+            column_type_sql = type.to_s
+            if precision
+              if (0..7) === precision
+                column_type_sql << "(#{precision})"
+              else
+                raise(ActiveRecordError, "The time type has precision of #{precision}. The allowed range of precision is from 0 to 7")
+              end
+            end
+            column_type_sql
           when "datetime2"
             column_type_sql = super
             if precision
@@ -248,9 +323,26 @@ module ActiveRecord
               end
             end
             column_type_sql
+          when "datetimeoffset"
+            column_type_sql = super
+            if precision
+              if (0..7) === precision
+                column_type_sql << "(#{precision})"
+              else
+                raise(ActiveRecordError, "The datetimeoffset type has precision of #{precision}. The allowed range of precision is from 0 to 7")
+              end
+            end
+            column_type_sql
           else
             super
           end
+        end
+
+        # In SQL Server only the first column added should have the `ADD` keyword.
+        def add_timestamps(table_name, **options)
+          fragments = add_timestamps_for_alter(table_name, **options)
+          fragments[1..].each { |fragment| fragment.sub!('ADD ', '') }
+          execute "ALTER TABLE #{quote_table_name(table_name)} #{fragments.join(', ')}"
         end
 
         def columns_for_distinct(columns, orders)
@@ -267,16 +359,19 @@ module ActiveRecord
           SQLServer::Table.new(table_name, base)
         end
 
-        def change_column_null(table_name, column_name, allow_null, default = nil)
+        def change_column_null(table_name, column_name, null, default = nil)
+          validate_change_column_null_argument!(null)
+
           table_id = SQLServer::Utils.extract_identifiers(table_name)
           column_id = SQLServer::Utils.extract_identifiers(column_name)
           column = column_for(table_name, column_name)
-          if !allow_null.nil? && allow_null == false && !default.nil?
-            do_execute("UPDATE #{table_id} SET #{column_id}=#{quote(default)} WHERE #{column_id} IS NULL")
+          if !null.nil? && null == false && !default.nil?
+            execute("UPDATE #{table_id} SET #{column_id}=#{quote(default)} WHERE #{column_id} IS NULL")
           end
           sql = "ALTER TABLE #{table_id} ALTER COLUMN #{column_id} #{type_to_sql column.type, limit: column.limit, precision: column.precision, scale: column.scale}"
-          sql += " NOT NULL" if !allow_null.nil? && allow_null == false
-          do_execute sql
+          sql += " NOT NULL" if !null.nil? && null == false
+
+          execute sql
         end
 
         def create_schema_dumper(options)
@@ -346,7 +441,7 @@ module ActiveRecord
             datetime2: { name: "datetime2" },
             datetimeoffset: { name: "datetimeoffset" },
             smalldatetime: { name: "smalldatetime" },
-            timestamp: { name: "datetime" },
+            timestamp: { name: "datetime2(6)" },
             time: { name: "time" },
             char: { name: "char" },
             varchar: { name: "varchar", limit: 8000 },
@@ -371,13 +466,24 @@ module ActiveRecord
           view_exists = view_exists?(table_name)
           view_tblnm  = view_table_name(table_name) if view_exists
 
+          if view_exists
+            sql = <<~SQL
+              SELECT LOWER(c.COLUMN_NAME) AS [name], c.COLUMN_DEFAULT AS [default]
+              FROM #{database}.INFORMATION_SCHEMA.COLUMNS c
+              WHERE c.TABLE_NAME = #{quote(view_tblnm)}
+            SQL
+            results = internal_exec_query(sql, "SCHEMA")
+            default_functions = results.each.with_object({}) { |row, out| out[row["name"]] = row["default"] }.compact
+          end
+
           sql = column_definitions_sql(database, identifier)
 
           binds = []
           nv128 = SQLServer::Type::UnicodeVarchar.new limit: 128
           binds << Relation::QueryAttribute.new("TABLE_NAME", identifier.object, nv128)
           binds << Relation::QueryAttribute.new("TABLE_SCHEMA", identifier.schema, nv128) unless identifier.schema.blank?
-          results = sp_executesql(sql, "SCHEMA", binds)
+          results = internal_exec_query(sql, "SCHEMA", binds)
+
           columns = results.map do |ci|
             ci = ci.symbolize_keys
             ci[:_type] = ci[:type]
@@ -402,13 +508,8 @@ module ActiveRecord
             ci[:default_function] = begin
               default = ci[:default_value]
               if default.nil? && view_exists
-                default = select_value %{
-                  SELECT c.COLUMN_DEFAULT
-                  FROM #{database}.INFORMATION_SCHEMA.COLUMNS c
-                  WHERE
-                    c.TABLE_NAME = '#{view_tblnm}'
-                    AND c.COLUMN_NAME = '#{views_real_column_name(table_name, ci[:name])}'
-                }.squish, "SCHEMA"
+                view_column = views_real_column_name(table_name, ci[:name]).downcase
+                default = default_functions[view_column] if view_column.present?
               end
               case default
               when nil
@@ -524,7 +625,7 @@ module ActiveRecord
         def remove_check_constraints(table_name, column_name)
           constraints = select_values "SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE where TABLE_NAME = '#{quote_string(table_name)}' and COLUMN_NAME = '#{quote_string(column_name)}'", "SCHEMA"
           constraints.each do |constraint|
-            do_execute "ALTER TABLE #{quote_table_name(table_name)} DROP CONSTRAINT #{quote_column_name(constraint)}"
+            execute "ALTER TABLE #{quote_table_name(table_name)} DROP CONSTRAINT #{quote_column_name(constraint)}"
           end
         end
 
@@ -533,7 +634,7 @@ module ActiveRecord
           execute_procedure(:sp_helpconstraint, table_name, "nomsg").flatten.select do |row|
             row["constraint_type"] == "DEFAULT on column #{column_name}"
           end.each do |row|
-            do_execute "ALTER TABLE #{quote_table_name(table_name)} DROP CONSTRAINT #{row['constraint_name']}"
+            execute "ALTER TABLE #{quote_table_name(table_name)} DROP CONSTRAINT #{row['constraint_name']}"
           end
         end
 
@@ -580,18 +681,21 @@ module ActiveRecord
           @view_information ||= {}
           @view_information[table_name] ||= begin
             identifier = SQLServer::Utils.extract_identifiers(table_name)
-            view_info = select_one "SELECT * FROM INFORMATION_SCHEMA.VIEWS WITH (NOLOCK) WHERE TABLE_NAME = #{quote(identifier.object)}", "SCHEMA"
+            information_query_table = identifier.database.present? ? "[#{identifier.database}].[INFORMATION_SCHEMA].[VIEWS]" :  "[INFORMATION_SCHEMA].[VIEWS]"
+            view_info = select_one "SELECT * FROM #{information_query_table} WITH (NOLOCK) WHERE TABLE_NAME = #{quote(identifier.object)}", "SCHEMA"
+
             if view_info
               view_info = view_info.with_indifferent_access
               if view_info[:VIEW_DEFINITION].blank? || view_info[:VIEW_DEFINITION].length == 4000
                 view_info[:VIEW_DEFINITION] = begin
-                  select_values("EXEC sp_helptext #{identifier.object_quoted}", "SCHEMA").join
+                                                select_values("EXEC sp_helptext #{identifier.object_quoted}", "SCHEMA").join
                                               rescue
                                                 warn "No view definition found, possible permissions problem.\nPlease run GRANT VIEW DEFINITION TO your_user;"
                                                 nil
-                end
+                                              end
               end
             end
+
             view_info
           end
         end
@@ -600,7 +704,8 @@ module ActiveRecord
           view_definition = view_information(table_name)[:VIEW_DEFINITION]
           return column_name unless view_definition
 
-          match_data = view_definition.match(/([\w-]*)\s+as\s+#{column_name}/im)
+          # Remove "CREATE VIEW ... AS SELECT ..." and then match the column name.
+          match_data = view_definition.sub(/CREATE\s+VIEW.*AS\s+SELECT\s/, '').match(/([\w-]*)\s+AS\s+#{column_name}\W/im)
           match_data ? match_data[1] : column_name
         end
 

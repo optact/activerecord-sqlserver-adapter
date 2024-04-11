@@ -19,7 +19,6 @@ class AdapterTestSQLServer < ActiveRecord::TestCase
     string = connection.inspect
     _(string).must_match %r{ActiveRecord::ConnectionAdapters::SQLServerAdapter}
     _(string).must_match %r{version\: \d.\d}
-    _(string).must_match %r{mode: dblib}
     _(string).must_match %r{azure: (true|false)}
     _(string).wont_match %r{host}
     _(string).wont_match %r{password}
@@ -102,16 +101,18 @@ class AdapterTestSQLServer < ActiveRecord::TestCase
   it "test bad connection" do
     assert_raise ActiveRecord::NoDatabaseError do
       db_config = ActiveRecord::Base.configurations.configs_for(env_name: "arunit", name: "primary")
-      configuration = db_config.configuration_hash.merge(database: "inexistent_activerecord_unittest")
-      ActiveRecord::Base.sqlserver_connection configuration
+      configuration = db_config.configuration_hash.merge(database: "nonexistent_activerecord_unittest")
+
+      connection = ActiveRecord::Base.sqlserver_connection configuration
+      connection.exec_query("SELECT 1")
     end
   end
 
   it "test database exists returns false if database does not exist" do
     db_config = ActiveRecord::Base.configurations.configs_for(env_name: "arunit", name: "primary")
-    configuration = db_config.configuration_hash.merge(database: "inexistent_activerecord_unittest")
+    configuration = db_config.configuration_hash.merge(database: "nonexistent_activerecord_unittest")
     assert_not ActiveRecord::ConnectionAdapters::SQLServerAdapter.database_exists?(configuration),
-               "expected database to not exist"
+               "expected database #{configuration[:database]} to not exist"
   end
 
   it "test database exists returns true when the database exists" do
@@ -193,17 +194,31 @@ class AdapterTestSQLServer < ActiveRecord::TestCase
       @identity_insert_sql_unquoted = "INSERT INTO funny_jokes (id, name) VALUES(420, 'Knock knock')"
       @identity_insert_sql_unordered = "INSERT INTO [funny_jokes] ([name],[id]) VALUES('Knock knock',420)"
       @identity_insert_sql_sp = "EXEC sp_executesql N'INSERT INTO [funny_jokes] ([id],[name]) VALUES (@0, @1)', N'@0 int, @1 nvarchar(255)', @0 = 420, @1 = N'Knock knock'"
-      @identity_insert_sql_unquoted_sp = "EXEC sp_executesql N'INSERT INTO [funny_jokes] (id, name) VALUES (@0, @1)', N'@0 int, @1 nvarchar(255)', @0 = 420, @1 = N'Knock knock'"
+      @identity_insert_sql_unquoted_sp = "EXEC sp_executesql N'INSERT INTO funny_jokes (id, name) VALUES (@0, @1)', N'@0 int, @1 nvarchar(255)', @0 = 420, @1 = N'Knock knock'"
       @identity_insert_sql_unordered_sp = "EXEC sp_executesql N'INSERT INTO [funny_jokes] ([name],[id]) VALUES (@0, @1)', N'@0 nvarchar(255), @1  int', @0 = N'Knock knock', @1 = 420"
+
+      @identity_insert_sql_non_dbo = "INSERT INTO [test].[aliens] ([id],[name]) VALUES(420,'Mork')"
+      @identity_insert_sql_non_dbo_unquoted = "INSERT INTO test.aliens ([id],[name]) VALUES(420,'Mork')"
+      @identity_insert_sql_non_dbo_unordered = "INSERT INTO [test].[aliens] ([name],[id]) VALUES('Mork',420)"
+      @identity_insert_sql_non_dbo_sp = "EXEC sp_executesql N'INSERT INTO [test].[aliens] ([id],[name]) VALUES (@0, @1)', N'@0 int, @1 nvarchar(255)', @0 = 420, @1 = N'Mork'"
+      @identity_insert_sql_non_dbo_unquoted_sp = "EXEC sp_executesql N'INSERT INTO test.aliens (id, name) VALUES (@0, @1)', N'@0 int, @1 nvarchar(255)', @0 = 420, @1 = N'Mork'"
+      @identity_insert_sql_non_dbo_unordered_sp = "EXEC sp_executesql N'INSERT INTO [test].[aliens] ([name],[id]) VALUES (@0, @1)', N'@0 nvarchar(255), @1  int', @0 = N'Mork', @1 = 420"
     end
 
     it "return quoted table_name to #query_requires_identity_insert? when INSERT sql contains id column" do
-      assert_equal "funny_jokes", connection.send(:query_requires_identity_insert?, @identity_insert_sql)
-      assert_equal "funny_jokes", connection.send(:query_requires_identity_insert?, @identity_insert_sql_unquoted)
-      assert_equal "funny_jokes", connection.send(:query_requires_identity_insert?, @identity_insert_sql_unordered)
-      assert_equal "funny_jokes", connection.send(:query_requires_identity_insert?, @identity_insert_sql_sp)
-      assert_equal "funny_jokes", connection.send(:query_requires_identity_insert?, @identity_insert_sql_unquoted_sp)
-      assert_equal "funny_jokes", connection.send(:query_requires_identity_insert?, @identity_insert_sql_unordered_sp)
+      assert_equal "[funny_jokes]",   connection.send(:query_requires_identity_insert?, @identity_insert_sql)
+      assert_equal "[funny_jokes]",   connection.send(:query_requires_identity_insert?, @identity_insert_sql_unquoted)
+      assert_equal "[funny_jokes]",   connection.send(:query_requires_identity_insert?, @identity_insert_sql_unordered)
+      assert_equal "[funny_jokes]",   connection.send(:query_requires_identity_insert?, @identity_insert_sql_sp)
+      assert_equal "[funny_jokes]",   connection.send(:query_requires_identity_insert?, @identity_insert_sql_unquoted_sp)
+      assert_equal "[funny_jokes]",   connection.send(:query_requires_identity_insert?, @identity_insert_sql_unordered_sp)
+
+      assert_equal "[test].[aliens]", connection.send(:query_requires_identity_insert?, @identity_insert_sql_non_dbo)
+      assert_equal "[test].[aliens]", connection.send(:query_requires_identity_insert?, @identity_insert_sql_non_dbo_unquoted)
+      assert_equal "[test].[aliens]", connection.send(:query_requires_identity_insert?, @identity_insert_sql_non_dbo_unordered)
+      assert_equal "[test].[aliens]", connection.send(:query_requires_identity_insert?, @identity_insert_sql_non_dbo_sp)
+      assert_equal "[test].[aliens]", connection.send(:query_requires_identity_insert?, @identity_insert_sql_non_dbo_unquoted_sp)
+      assert_equal "[test].[aliens]", connection.send(:query_requires_identity_insert?, @identity_insert_sql_non_dbo_unordered_sp)
     end
 
     it "return false to #query_requires_identity_insert? for normal SQL" do
@@ -292,7 +307,7 @@ class AdapterTestSQLServer < ActiveRecord::TestCase
   end
 
   describe "database statements" do
-    it "run the database consistency checker useroptions command" do
+    it "run the database consistency checker 'user_options' command" do
       skip "on azure" if connection_sqlserver_azure?
       keys = [:textsize, :language, :isolation_level, :dateformat]
       user_options = connection.user_options
@@ -331,7 +346,7 @@ class AdapterTestSQLServer < ActiveRecord::TestCase
       assert_equal "tinyint", connection.type_to_sql(:integer, limit: 1)
     end
 
-    it "create bigints when limit is greateer than 4" do
+    it "create bigints when limit is greater than 4" do
       assert_equal "bigint", connection.type_to_sql(:integer, limit: 5)
       assert_equal "bigint", connection.type_to_sql(:integer, limit: 6)
       assert_equal "bigint", connection.type_to_sql(:integer, limit: 7)
@@ -373,11 +388,28 @@ class AdapterTestSQLServer < ActiveRecord::TestCase
       assert_match(/CREATE VIEW sst_customers_view/, view_info["VIEW_DEFINITION"])
     end
 
+    it "allows connection#view_information to work with qualified object names" do
+      view_info = connection.send(:view_information, "[activerecord_unittest].[dbo].[sst_customers_view]")
+      assert_equal("sst_customers_view", view_info["TABLE_NAME"])
+      assert_match(/CREATE VIEW sst_customers_view/, view_info["VIEW_DEFINITION"])
+    end
+
+    it "allows connection#view_information to work across databases when using qualified object names" do
+      # College is defined in activerecord_unittest2 database.
+      view_info = College.connection.send(:view_information, "[activerecord_unittest].[dbo].[sst_customers_view]")
+      assert_equal("sst_customers_view", view_info["TABLE_NAME"])
+      assert_match(/CREATE VIEW sst_customers_view/, view_info["VIEW_DEFINITION"])
+    end
+
     it "allow the connection#view_table_name method to return true table_name for the view" do
       assert_equal "customers", connection.send(:view_table_name, "sst_customers_view")
       assert_equal "topics", connection.send(:view_table_name, "topics"), "No view here, the same table name should come back."
     end
 
+    it "allow the connection#view_table_name method to return true table_name for the view for other connections" do
+      assert_equal "customers", College.connection.send(:view_table_name, "[activerecord_unittest].[dbo].[sst_customers_view]")
+      assert_equal "topics", College.connection.send(:view_table_name, "topics"), "No view here, the same table name should come back."
+    end
     # With same column names
 
     it "have matching column objects" do
@@ -476,7 +508,7 @@ class AdapterTestSQLServer < ActiveRecord::TestCase
 
   describe "block writes to a database" do
     def setup
-      @conn = ActiveRecord::Base.connection
+      @conn = ActiveRecord::Base.lease_connection
     end
 
     def test_errors_when_an_insert_query_is_called_while_preventing_writes
@@ -512,6 +544,28 @@ class AdapterTestSQLServer < ActiveRecord::TestCase
 
       ActiveRecord::Base.while_preventing_writes do
         assert_equal 1, @conn.execute("SELECT * FROM [subscribers] WHERE [subscribers].[nick] = 'aido'")
+      end
+    end
+  end
+
+  describe 'table is in non-dbo schema' do
+    it "records can be created successfully" do
+      Alien.create!(name: 'Trisolarans')
+    end
+
+    it 'records can be inserted using SQL' do
+      Alien.connection.exec_insert("insert into [test].[aliens] (id, name) VALUES(1, 'Trisolarans'), (2, 'Xenomorph')")
+    end
+  end
+
+  describe "exec_insert" do
+    it 'values clause should be case-insensitive' do
+      assert_difference("Post.count", 4) do
+        first_insert = connection.exec_insert("INSERT INTO [posts] ([id],[title],[body]) VALUES(100, 'Title', 'Body'), (102, 'Title', 'Body')")
+        second_insert = connection.exec_insert("INSERT INTO [posts] ([id],[title],[body]) values(113, 'Body', 'Body'), (114, 'Body', 'Body')")
+
+        assert_equal first_insert.rows.map(&:first), [100, 102]
+        assert_equal second_insert.rows.map(&:first), [113, 114]
       end
     end
   end

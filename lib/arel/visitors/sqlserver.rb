@@ -67,7 +67,7 @@ module Arel
       def visit_Arel_Nodes_HomogeneousIn(o, collector)
         collector.preparable = false
 
-        collector << quote_table_name(o.table_name) << "." << quote_column_name(o.column_name)
+        visit o.left, collector
 
         if o.type == :in
           collector << " IN ("
@@ -77,24 +77,23 @@ module Arel
 
         values = o.casted_values
 
+        # Monkey-patch start.
+        column_name = o.attribute.name
+        column_type = o.attribute.relation.type_for_attribute(column_name)
+        column_type = column_type.cast_type if column_type.is_a?(ActiveRecord::Encryption::EncryptedAttributeType) # Use cast_type on encrypted attributes. Don't encrypt them again
+
         if values.empty?
           collector << @connection.quote(nil)
-        elsif @connection.prepared_statements
-          # Monkey-patch start. Add query attribute bindings rather than just values.
-          column_name = o.column_name
-          column_type = o.attribute.relation.type_for_attribute(o.column_name)
-          # Use cast_type on encrypted attributes. Don't encrypt them again
-          column_type = column_type.cast_type if column_type.is_a?(ActiveRecord::Encryption::EncryptedAttributeType)
+        elsif @connection.prepared_statements && !column_type.serialized?
+          # Add query attribute bindings rather than just values.
           attrs = values.map { |value| ActiveRecord::Relation::QueryAttribute.new(column_name, value, column_type) }
-
           collector.add_binds(attrs, &bind_block)
-          # Monkey-patch end.
         else
-          collector.add_binds(values, &bind_block)
+          collector.add_binds(values, o.proc_for_binds, &bind_block)
         end
+        # Monkey-patch end.
 
         collector << ")"
-        collector
       end
 
       def visit_Arel_Nodes_SelectStatement(o, collector)
@@ -214,7 +213,7 @@ module Arel
 
       def visit_Orders_And_Let_Fetch_Happen(o, collector)
         make_Fetch_Possible_And_Deterministic o
-        unless o.orders.empty?
+        if o.orders.any?
           collector << " ORDER BY "
           len = o.orders.length - 1
           o.orders.each_with_index { |x, i|
@@ -262,15 +261,14 @@ module Arel
 
       def make_Fetch_Possible_And_Deterministic(o)
         return if o.limit.nil? && o.offset.nil?
+        return if o.orders.any?
 
         t = table_From_Statement o
         pk = primary_Key_From_Table t
         return unless pk
 
-        if o.orders.empty?
-          # Prefer deterministic vs a simple `(SELECT NULL)` expr.
-          o.orders = [pk.asc]
-        end
+        # Prefer deterministic vs a simple `(SELECT NULL)` expr.
+        o.orders = [pk.asc]
       end
 
       def distinct_One_As_One_Is_So_Not_Fetch(o)

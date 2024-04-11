@@ -9,6 +9,8 @@ task test: ["test:dblib"]
 task default: [:test]
 
 namespace :test do
+  ENV["ARCONN"] = "sqlserver"
+
   %w(dblib).each do |mode|
     Rake::TestTask.new(mode) do |t|
       t.libs = ARTest::SQLServer.test_load_paths
@@ -17,13 +19,7 @@ namespace :test do
       t.verbose = false
     end
   end
-
-  task "dblib:env" do
-    ENV["ARCONN"] = "dblib"
-  end
 end
-
-task "test:dblib" => "test:dblib:env"
 
 namespace :profile do
   ["dblib"].each do |mode|

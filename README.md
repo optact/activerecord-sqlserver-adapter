@@ -11,15 +11,17 @@ The SQL Server adapter for ActiveRecord using SQL Server 2012 or higher.
 
 Interested in older versions? We follow a rational versioning policy that tracks Rails. That means that our 7.x version of the adapter is only for the latest 7.x version of Rails. If you need the adapter for SQL Server 2008 or 2005, you are still in the right spot. Just install the latest 3.2.x to 4.1.x version of the adapter that matches your Rails version. We also have stable branches for each major/minor release of ActiveRecord.
 
-| Adapter Version | Rails Version | Support                                                                                     |
-| --------------- | ------------- | ------------------------------------------------------------------------------------------- |
-| `7.0.0.0`       | `7.0.x`       | [active](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/main)   |
-| `6.1.2.1`       | `6.1.x`       | [active](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/6-1-stable) |
-| `6.0.2`         | `6.0.x`       | [active](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/6-0-stable) |
-| `5.2.1`         | `5.2.x`       | [ended](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/5-2-stable) |
-| `5.1.6`         | `5.1.x`       | [ended](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/5-1-stable)  |
-| `4.2.18`        | `4.2.x`       | [ended](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/4-2-stable)  |
-| `4.1.8`         | `4.1.x`       | [ended](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/4-1-stable)  |
+| Adapter Version | Rails Version | Support        | Branch                                                                                          |
+|-----------------|---------------|----------------|-------------------------------------------------------------------------------------------------|
+| Unreleased      | Edge          | In Development | [main](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/main)             |
+| `7.1.3`         | `7.1.x`       | Active         | [7-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/7-1-stable) |
+| `7.0.5.1`       | `7.0.x`       | Active         | [7-0-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/7-0-stable) |
+| `6.1.3.0`       | `6.1.x`       | Active         | [6-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/6-1-stable) |
+| `6.0.3`         | `6.0.x`       | Ended          | [6-0-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/6-0-stable) |
+| `5.2.1`         | `5.2.x`       | Ended          | [5-2-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/5-2-stable) |
+| `5.1.6`         | `5.1.x`       | Ended          | [5-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/5-1-stable) |
+| `4.2.18`        | `4.2.x`       | Ended          | [4-2-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/4-2-stable) |
+| `4.1.8`         | `4.1.x`       | Ended          | [4-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/4-1-stable) |
 
 For older versions, please check their stable branches.
 
@@ -29,7 +31,11 @@ We support every data type supported by FreeTDS. All simplified Rails types in m
 
 The following types (`date`, `datetime2`, `datetimeoffset`, `time`) all require TDS version `7.3` with TinyTDS. We recommend using FreeTDS 1.0 or higher which default to using `TDSVER` to `7.3`. The adapter also sets TinyTDS's `tds_version` to this as well if non is specified.
 
-The Rails v5 adapter supports ActiveRecord's `datetime_with_precision` setting. This means that passing `:precision` to a datetime column is supported. Using a precision with the `:datetime` type will signal the adapter to use the `datetime2` type under the hood.
+The adapter supports ActiveRecord's `datetime_with_precision` setting. This means that passing `:precision` to a datetime column is supported.
+
+By default, precision 6 is used for `:datetime` types if precision is not specified. Any non-nil precision will tell
+the adapter to use the `datetime2` column type. To create a `datetime` column using a migration a precision of `nil`
+should be specified, otherwise the precision will default to 6 and a `datetime2` column will be created.
 
 
 #### Identity Inserts with Triggers
@@ -85,14 +91,17 @@ end
 
 #### Configure Connection
 
-We currently conform to an unpublished and non-standard AbstractAdapter interface to configure connections made to the database. To do so, just override the `configure_connection` method in an initializer like so. In this case below we are setting the `TEXTSIZE` to 64 megabytes.
+The adapter conforms to the AbstractAdapter interface to configure connections. If you require additional connection
+configuration then implement the `configure_connection` method in an initializer like so. In the following
+example we are setting the `TEXTSIZE` to 64 megabytes.
 
 ```ruby
 module ActiveRecord
   module ConnectionAdapters
     class SQLServerAdapter < AbstractAdapter
       def configure_connection
-        raw_connection_do "SET TEXTSIZE #{64.megabytes}"
+        super
+        @raw_connection.execute("SET TEXTSIZE #{64.megabytes}").do
       end
     end
   end
@@ -166,7 +175,8 @@ To then connect the application to your SQL Server instance edit the `config/dat
 
 ## Installation
 
-The adapter has no strict gem dependencies outside of `ActiveRecord`. You will have to pick a connection mode, the default is dblib which uses the `TinyTDS` gem. Just bundle the gem and the adapter will use it.
+The adapter has no strict gem dependencies outside of `ActiveRecord` and
+[TinyTDS](https://github.com/rails-sqlserver/tiny_tds).
 
 ```ruby
 gem 'activerecord-sqlserver-adapter'
@@ -174,11 +184,49 @@ gem 'activerecord-sqlserver-adapter'
 
 ## Contributing
 
-If you would like to contribute a feature or bugfix, thanks! To make sure your fix/feature has a high chance of being added, please read the following guidelines. First, ask on the Gitter, or post a ticket on github issues. Second, make sure there are tests! We will not accept any patch that is not tested. Please read the [`RUNNING_UNIT_TESTS`](RUNNING_UNIT_TESTS.md) file for the details of how to run the unit tests.
+Please contribute to the project by submitting bug fixes and features. To make sure your fix/feature has
+a high chance of being added, please include tests in your pull request. To run the tests you will need to
+setup your development environment.
 
-* Github: http://github.com/rails-sqlserver/activerecord-sqlserver-adapter
-* Gitter: https://gitter.im/rails-sqlserver/activerecord-sqlserver-adapter
+## Setting Up Your Development Environment
 
+To run the test suite you can use any of the following methods below. See [RUNNING_UNIT_TESTS](RUNNING_UNIT_TESTS.md) for
+more detailed information on running unit tests.
+
+### Dev Container CLI
+
+With [Docker](https://www.docker.com) and [npm](https://github.com/npm/cli) installed, you can run [Dev Container CLI](https://github.com/devcontainers/cli) to
+utilize the [`.devcontainer`](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/main/.devcontainer) configuration from the command line.
+
+```bash
+$ npm install -g @devcontainers/cli
+$ cd activerecord-sqlserver-adapter
+$ devcontainer up --workspace-folder .
+$ devcontainer exec --workspace-folder . bash
+```
+
+From within the container, you can run the tests using the following command:
+
+```bash
+$ bundle install
+$ bundle exec rake test
+```
+
+_Note: The setup we use is based on the [Rails Dev Container setup.](https://guides.rubyonrails.org/contributing_to_ruby_on_rails.html#using-dev-container-cli)_
+
+### VirtualBox & Vagrant
+
+The [activerecord-sqlserver-adapter-dev-box](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter-dev-box)
+is a Vagrant/VirtualBox virtual machine that has MS SQL Server installed. However, the
+activerecord-sqlserver-adapter-dev-box uses Vagrant and Virtual Box which will not work on Macs with Apple silicon.
+
+### Local Development
+
+See the [RUNNING_UNIT_TESTS](RUNNING_UNIT_TESTS.md) file for the details of how to run the unit tests locally.
+
+## Community
+
+There is a [Gitter channel](https://gitter.im/rails-sqlserver/activerecord-sqlserver-adapter) for the project where you are free to ask questions about the project.
 
 ## Credits & Contributions
 
@@ -186,6 +234,7 @@ Many many people have contributed. If you do not see your name here and it shoul
 
 You can see an up-to-date list of contributors here: http://github.com/rails-sqlserver/activerecord-sqlserver-adapter/contributors
 
+
 ## License
 
-Copyright © 2008-2022. It is free software, and may be redistributed under the terms specified in the [MIT-LICENSE](MIT-LICENSE) file.
+ActiveRecord SQL Server Adapter is released under the [MIT License](https://opensource.org/licenses/MIT).

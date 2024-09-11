@@ -1,7 +1,6 @@
 # ActiveRecord SQL Server Adapter. For SQL Server 2012 And Higher.
 
 * [![CI](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/actions/workflows/ci.yml/badge.svg)](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/actions/workflows/ci.yml) - CI
-* [![Build Status](https://ci.appveyor.com/api/projects/status/mtgbx8f57vr7k2qa/branch/master?svg=true)](https://ci.appveyor.com/project/rails-sqlserver/activerecord-sqlserver-adapter/branch/master) - Appveyor
 * [![Gem Version](http://img.shields.io/gem/v/activerecord-sqlserver-adapter.svg)](https://rubygems.org/gems/activerecord-sqlserver-adapter) - Gem Version
 * [![Gitter chat](https://img.shields.io/badge/%E2%8A%AA%20GITTER%20-JOIN%20CHAT%20%E2%86%92-brightgreen.svg?style=flat)](https://gitter.im/rails-sqlserver/activerecord-sqlserver-adapter) - Community
 
@@ -9,21 +8,26 @@
 
 The SQL Server adapter for ActiveRecord using SQL Server 2012 or higher.
 
-Interested in older versions? We follow a rational versioning policy that tracks Rails. That means that our 7.x version of the adapter is only for the latest 7.x version of Rails. If you need the adapter for SQL Server 2008 or 2005, you are still in the right spot. Just install the latest 3.2.x to 4.1.x version of the adapter that matches your Rails version. We also have stable branches for each major/minor release of ActiveRecord.
+Interested in older versions? We follow a rational versioning policy that tracks Rails. That means that our 7.x version
+of the adapter is only for the latest 7.x version of Rails. If you need the adapter for SQL Server 2008 or 2005, you
+are still in the right spot. Just install the latest 3.2.x to 4.1.x version of the adapter that matches your Rails
+version. We also have stable branches for each major/minor release of ActiveRecord. For older versions, please check
+their stable branches.
 
 | Adapter Version | Rails Version | Support        | Branch                                                                                          |
 |-----------------|---------------|----------------|-------------------------------------------------------------------------------------------------|
-| Unreleased      | Edge          | In Development | [main](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/main)             |
-| `7.1.3`         | `7.1.x`       | Active         | [7-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/7-1-stable) |
-| `7.0.5.1`       | `7.0.x`       | Active         | [7-0-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/7-0-stable) |
-| `6.1.3.0`       | `6.1.x`       | Active         | [6-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/6-1-stable) |
-| `6.0.3`         | `6.0.x`       | Ended          | [6-0-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/6-0-stable) |
-| `5.2.1`         | `5.2.x`       | Ended          | [5-2-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/5-2-stable) |
-| `5.1.6`         | `5.1.x`       | Ended          | [5-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/5-1-stable) |
-| `4.2.18`        | `4.2.x`       | Ended          | [4-2-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/4-2-stable) |
-| `4.1.8`         | `4.1.x`       | Ended          | [4-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/4-1-stable) |
+| Unreleased        | `8.0.x`       | In Development | [main](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/main)             |
+| `7.2.x`         | `7.2.x`       | Active         | [7-2-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/7-2-stable) |
+| `7.1.x`         | `7.1.x`       | Active         | [7-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/7-1-stable) |
+| `7.0.x`         | `7.0.x`       | Active         | [7-0-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/7-0-stable) |
+| `6.1.x`         | `6.1.x`       | Active         | [6-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/6-1-stable) |
+| `6.0.x`         | `6.0.x`       | Ended          | [6-0-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/6-0-stable) |
+| `5.2.x`         | `5.2.x`       | Ended          | [5-2-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/5-2-stable) |
+| `5.1.x`         | `5.1.x`       | Ended          | [5-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/5-1-stable) |
+| `4.2.x`         | `4.2.x`       | Ended          | [4-2-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/4-2-stable) |
+| `4.1.x`         | `4.1.x`       | Ended          | [4-1-stable](https://github.com/rails-sqlserver/activerecord-sqlserver-adapter/tree/4-1-stable) |
 
-For older versions, please check their stable branches.
+See [Rubygems](https://rubygems.org/gems/activerecord-sqlserver-adapter/versions) for the latest version of the adapter for each Rails release.
 
 #### Native Data Type Support
 
@@ -50,6 +54,10 @@ adapter.exclude_output_inserted_table_names['my_table_name'] = true
 
 # Explicitly set the data type for the temporary key table.
 adapter.exclude_output_inserted_table_names['my_uuid_table_name'] = 'uniqueidentifier'
+
+
+# Explicitly set data types when data type is different for composite primary keys.
+adapter.exclude_output_inserted_table_names['my_composite_pk_table_name'] = { pk_col_one: "uniqueidentifier", pk_col_two: "int" }
 ```
 
 
@@ -164,14 +172,35 @@ ActiveRecord::ConnectionAdapters::SQLServerAdapter.showplan_option = 'SHOWPLAN_X
 
 ## New Rails Applications
 
-When creating a new Rails application you can specify that you want to use the SQL Server adapter using the `database` option:
+When creating a new Rails application you need to perform the following steps to connect a Rails application to a
+SQL Server instance.
 
+1. Create new Rails application, the database defaults to `sqlite`.
+
+```bash
+rails new my_app
 ```
-rails new my_app --database=sqlserver
+
+2. Update the Gemfile to install the adapter instead of the SQLite adapter. Remove the `sqlite3` gem from the Gemfile.
+
+```ruby
+gem 'activerecord-sqlserver-adapter'
 ```
 
-To then connect the application to your SQL Server instance edit the `config/database.yml` file with the username, password and host of your SQL Server instance.
+3. Connect the application to your SQL Server instance by editing the `config/database.yml` file with the username,
+password and host of your SQL Server instance.
 
+Example:
+
+```yaml
+development:
+  adapter: sqlserver
+  host: 'localhost'
+  port: 1433
+  database: my_app_development
+  username: 'frank_castle'
+  password: 'secret'
+```
 
 ## Installation
 

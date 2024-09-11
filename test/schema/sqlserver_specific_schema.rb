@@ -151,6 +151,10 @@ ActiveRecord::Schema.define do
     SELECT GETUTCDATE() utcdate
   SQL
 
+  create_table 'A Table With Spaces', force: true do |t|
+    t.string :name
+  end
+
   # Constraints
 
   create_table(:sst_has_fks, force: true) do |t|
@@ -249,6 +253,23 @@ ActiveRecord::Schema.define do
     SELECT pk_col_one AS id_source, event_name FROM INSERTED
   SQL
 
+  execute "IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'sst_table_with_composite_pk_trigger_with_different_data_type') DROP TABLE sst_table_with_composite_pk_trigger_with_different_data_type"
+  execute <<-SQL
+    CREATE TABLE sst_table_with_composite_pk_trigger_with_different_data_type(
+      pk_col_one uniqueidentifier DEFAULT NEWID(),
+      pk_col_two int NOT NULL,
+      event_name nvarchar(255),
+      CONSTRAINT PK_sst_table_with_composite_pk_trigger_with_different_data_type PRIMARY KEY (pk_col_one, pk_col_two)
+    )
+  SQL
+  execute <<-SQL
+    CREATE TRIGGER sst_table_with_composite_pk_trigger_with_different_data_type_t ON sst_table_with_composite_pk_trigger_with_different_data_type
+    FOR INSERT
+    AS
+    INSERT INTO sst_table_with_trigger_history (id_source, event_name)
+    SELECT pk_col_one AS id_source, event_name FROM INSERTED
+  SQL
+
   # Another schema.
 
   create_table :sst_schema_columns, force: true do |t|
@@ -287,17 +308,17 @@ ActiveRecord::Schema.define do
     )
   NATURALPKTABLESQLINOTHERSCHEMA
 
-  execute "IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'sst_schema_test_mulitple_schema' and TABLE_SCHEMA = 'test') DROP TABLE test.sst_schema_test_mulitple_schema"
+  execute "IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'sst_schema_test_multiple_schema' and TABLE_SCHEMA = 'test') DROP TABLE test.sst_schema_test_multiple_schema"
   execute <<-SCHEMATESTMULTIPLESCHEMA
-    CREATE TABLE test.sst_schema_test_mulitple_schema(
+    CREATE TABLE test.sst_schema_test_multiple_schema(
       field_1 int NOT NULL PRIMARY KEY,
       field_2 int,
     )
   SCHEMATESTMULTIPLESCHEMA
   execute "IF NOT EXISTS(SELECT * FROM sys.schemas WHERE name = 'test2') EXEC sp_executesql N'CREATE SCHEMA test2'"
-  execute "IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'sst_schema_test_mulitple_schema' and TABLE_SCHEMA = 'test2') DROP TABLE test2.sst_schema_test_mulitple_schema"
+  execute "IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'sst_schema_test_multiple_schema' and TABLE_SCHEMA = 'test2') DROP TABLE test2.sst_schema_test_multiple_schema"
   execute <<-SCHEMATESTMULTIPLESCHEMA
-    CREATE TABLE test2.sst_schema_test_mulitple_schema(
+    CREATE TABLE test2.sst_schema_test_multiple_schema(
       field_1 int,
       field_2 int NOT NULL PRIMARY KEY,
     )

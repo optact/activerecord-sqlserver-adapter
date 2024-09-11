@@ -6,9 +6,9 @@ FROM mcr.microsoft.com/devcontainers/ruby:${VARIANT}
 
 # TinyTDS
 RUN apt-get -y install libc6-dev \
-    && wget http://www.freetds.org/files/stable/freetds-1.1.32.tar.gz \
-    && tar -xzf freetds-1.1.32.tar.gz \
-    && cd freetds-1.1.32 \
+    && wget http://www.freetds.org/files/stable/freetds-1.4.14.tar.gz \
+    && tar -xzf freetds-1.4.14.tar.gz \
+    && cd freetds-1.4.14 \
     && ./configure --prefix=/usr/local --with-tdsver=7.3 \
     && make \
     && make install
@@ -25,6 +25,6 @@ RUN curl https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/t
 RUN mkdir -p /tmp/activerecord-sqlserver-adapter
 COPY Gemfile VERSION activerecord-sqlserver-adapter.gemspec /tmp/activerecord-sqlserver-adapter/
 RUN cd /tmp/activerecord-sqlserver-adapter \
-    && bundle install \
+    && RAILS_BRANCH=main bundle install \
     && rm -rf /tmp/activerecord-sqlserver-adapter
 RUN chown -R vscode:vscode /usr/local/rvm
